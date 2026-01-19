@@ -309,6 +309,123 @@ decision := {
 }
 ```
 
+## Preventing eval_conflict_error
+
+When multiple rules can produce different outputs for the same input, OPA throws `eval_conflict_error: functions must not produce multiple outputs for same inputs`. This commonly occurs with function-like rules that handle different conditions.
+
+### Problem: Overlapping Rule Conditions
+
+```rego
+# WRONG: These rules can both match for unknown actions!
+
+# Rule 1: Deny if user doesn't have project access
+evaluate_action(action) := decision if {
+    action != "create_project"
+    not has_project_access
+    decision := {"allowed": false, "reason": "Access denied: must be team member"}
+}
+
+# Rule 2: Deny unknown actions
+evaluate_action(action) := decision if {
+    not action in known_actions
+    decision := {"allowed": false, "reason": sprintf("Unknown action: %s", [action])}
+}
+
+# When action="fake_action" AND user has no project access,
+# BOTH rules match and produce DIFFERENT decisions → eval_conflict_error!
+```
+
+### Solution: Ensure Mutually Exclusive Conditions
+
+Add `action in known_actions` check to rules that should only apply to known actions:
+
+```rego
+# CORRECT: Rules are now mutually exclusive
+
+known_actions := ["view_project", "update_project", "delete_project"]
+
+# Rule 1: Only applies to known actions
+evaluate_action(action) := decision if {
+    action != "create_project"
+    action in known_actions  # ← Add this check!
+    not has_project_access
+    decision := {"allowed": false, "reason": "Access denied: must be team member"}
+}
+
+# Rule 2: Only catches truly unknown actions
+evaluate_action(action) := decision if {
+    not action in known_actions
+    decision := {"allowed": false, "reason": sprintf("Unknown action: %s", [action])}
+}
+```
+
+### Pattern: Known Actions Whitelist
+
+For authorization policies with multiple rules, define a whitelist and guard all rules:
+
+```rego
+# Define all known actions
+known_actions := [
+    "view_project", "create_project", "update_project", "delete_project",
+    "view_member", "create_member", "update_member", "delete_member"
+]
+
+# Permission granted
+evaluate_action(action) := decision if {
+    action in known_actions  # Guard: only known actions
+    has_permission(action)
+    decision := {"allowed": true, "reason": ""}
+}
+
+# Permission denied
+evaluate_action(action) := decision if {
+    action in known_actions  # Guard: only known actions
+    not has_permission(action)
+    decision := {"allowed": false, "reason": "Permission denied"}
+}
+
+# No role assigned (only for known actions)
+evaluate_action(action) := decision if {
+    action in known_actions  # Guard: only known actions
+    not has_role_definition
+    decision := {"allowed": false, "reason": "No role assigned"}
+}
+
+# Catch-all for unknown actions (LAST, no guard needed)
+evaluate_action(action) := decision if {
+    not action in known_actions
+    decision := {"allowed": false, "reason": sprintf("Unknown action: %s", [action])}
+}
+```
+
+### Alternative: Use `else` Chains
+
+For simpler cases, use `else` to create explicit priority:
+
+```rego
+evaluate_action(action) := {"allowed": true, "reason": ""} if {
+    has_permission(action)
+} else := {"allowed": false, "reason": "Permission denied"} if {
+    action in known_actions
+} else := {"allowed": false, "reason": sprintf("Unknown action: %s", [action])}
+```
+
+### Testing for Conflicts
+
+Always test with unknown actions:
+
+```rego
+test_unknown_action_with_various_contexts if {
+    # Test unknown action when user has no access
+    result := evaluate_action("fake_action") with input as {
+        "user": {"preferred_username": "non-member"},
+        "actions": ["fake_action"]
+    }
+    result.allowed == false
+    contains(result.reason, "Unknown action")
+}
+```
+
 ## Common Anti-Patterns
 
 ### 1. No Default Deny
@@ -392,6 +509,85 @@ resource_accessible if {
 }
 ```
 
+### 5. Domain Logic in Policies (Critical Anti-Pattern)
+
+OPA policies should only handle **authorization decisions** (who can do what), not **business/domain logic** (how things work). Mixing domain logic into policies creates maintenance nightmares and violates separation of concerns.
+
+**Wrong - Domain logic in policy:**
+```rego
+# DON'T: Calculate discounts in policy
+allow if {
+    input.action == "apply_discount"
+    input.user.membership == "gold"
+    input.order.total >= 100
+    # Policy is now calculating business rules!
+    discount := input.order.total * 0.15
+    discount <= input.user.max_discount
+}
+
+# DON'T: Validate business rules in policy
+allow if {
+    input.action == "create_order"
+    count(input.order.items) > 0
+    count(input.order.items) <= 50
+    every item in input.order.items {
+        item.quantity > 0
+        item.price > 0
+    }
+}
+
+# DON'T: Implement workflow state machines
+allow if {
+    input.action == "approve_request"
+    input.request.status == "pending_review"
+    input.request.reviewer_count >= 2
+    input.request.created_at < time.now_ns() - 86400000000000
+}
+```
+
+**Right - Pure authorization:**
+```rego
+# DO: Check permissions only
+allow if {
+    input.action == "apply_discount"
+    "discount:apply" in input.user.permissions
+}
+
+# DO: Check role-based access
+allow if {
+    input.action == "create_order"
+    has_role("order_creator")
+}
+
+# DO: Check simple authorization attributes
+allow if {
+    input.action == "approve_request"
+    has_role("approver")
+    input.user.id != input.request.created_by  # Separation of duties
+}
+```
+
+**Where domain logic belongs:**
+- **Application layer**: Business rules, validation, calculations
+- **Domain services**: State machines, workflows, complex logic
+- **Database constraints**: Data integrity rules
+
+**What belongs in OPA policies:**
+- Role/permission checks
+- Attribute-based access control (ABAC)
+- Resource ownership verification
+- Tenant isolation
+- Time-based access windows (simple)
+- IP/network restrictions
+
+**Warning signs you're adding domain logic:**
+- Calculations beyond simple comparisons
+- Complex validation rules
+- State machine transitions
+- Business rule enforcement
+- Data transformation
+- Workflow orchestration
+
 ## Formatting
 
 Always format with `opa fmt`:
@@ -417,3 +613,5 @@ Before committing a policy:
 - [ ] Code formatted with `opa fmt`
 - [ ] No magic numbers
 - [ ] Safe field access with defaults
+- [ ] No `eval_conflict_error` risk (mutually exclusive rule conditions)
+- [ ] Unknown action/input tests included
