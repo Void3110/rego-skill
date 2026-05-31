@@ -2,7 +2,6 @@
 
 package paas.request.actions_test
 
-import rego.v1
 import data.paas.request.actions
 
 ###################

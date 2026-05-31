@@ -3,8 +3,6 @@
 
 package examples.rbac
 
-import rego.v1
-
 # Expected input:
 # {
 #   "user": {"id": "...", "roles": ["admin", "developer"]},

@@ -3,8 +3,6 @@
 
 package examples.gateway
 
-import rego.v1
-
 # Expected input:
 # {
 #   "method": "GET" | "POST" | "PUT" | "DELETE",
@@ -55,7 +53,10 @@ token_active if {
 
 is_public_endpoint if {
     some pattern in public_patterns
-    glob.match(pattern, [], input.path)
+    # Delimiter ["/"] confines `*` to a single path segment, so a public pattern like
+    # "/api/v*/auth/login" cannot be over-matched by a crafted multi-segment path such as
+    # "/api/v1/admin/things/auth/login". Patterns that intentionally span segments use "**".
+    glob.match(pattern, ["/"], input.path)
 }
 
 public_patterns := [
@@ -86,7 +87,9 @@ method_matches(rule) if {
 }
 
 path_matches(rule) if {
-    glob.match(rule.path, [], input.path)
+    # Same segment-confined matching as public patterns (delimiter ["/"]). Rules that authorize a
+    # nested resource subtree use "**" in rule.path to span segments deliberately.
+    glob.match(rule.path, ["/"], input.path)
 }
 
 role_matches(rule) if {
@@ -103,10 +106,14 @@ role_matches(rule) if {
 # Endpoint Rules
 ###################
 
+# NOTE on patterns: with the ["/"] glob delimiter, `*` matches exactly ONE path segment and `**`
+# matches one-or-more. `v*` is a single version segment; a nested resource subtree (e.g. an admin
+# sub-resource or a user/project by id and below) uses `**` so legitimate deep paths still match
+# while the version segment boundary is preserved (closing the cross-segment over-match bypass).
 endpoint_rules := [
-    # Admin-only endpoints
+    # Admin-only endpoints (entire subtree)
     {
-        "path": "/api/v*/admin/*",
+        "path": "/api/v*/admin/**",
         "methods": ["*"],
         "roles": ["admin"]
     },
@@ -117,7 +124,7 @@ endpoint_rules := [
         "roles": ["admin", "manager", "user"]
     },
     {
-        "path": "/api/v*/users/*",
+        "path": "/api/v*/users/**",
         "methods": ["GET"],
         "roles": ["admin", "manager", "user"]
     },
@@ -127,7 +134,7 @@ endpoint_rules := [
         "roles": ["admin"]
     },
     {
-        "path": "/api/v*/users/*",
+        "path": "/api/v*/users/**",
         "methods": ["PUT", "DELETE"],
         "roles": ["admin", "manager"]
     },
@@ -138,7 +145,7 @@ endpoint_rules := [
         "roles": ["*"]
     },
     {
-        "path": "/api/v*/projects/*",
+        "path": "/api/v*/projects/**",
         "methods": ["GET"],
         "roles": ["*"]
     },
@@ -148,7 +155,7 @@ endpoint_rules := [
         "roles": ["admin", "manager", "developer"]
     },
     {
-        "path": "/api/v*/projects/*",
+        "path": "/api/v*/projects/**",
         "methods": ["PUT", "DELETE"],
         "roles": ["admin", "manager"]
     }

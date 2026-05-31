@@ -147,24 +147,39 @@ allow if "read" in user_permissions
 deny_write if not "write" in user_permissions
 ```
 
-## Modern Rego Syntax
+## Modern Rego Syntax (OPA 1.0+)
 
-### Use `import rego.v1`
+> **OPA 1.0 changed the defaults.** Since OPA v1.0 (released Jan 2025), the `if`, `in`,
+> `contains`, and `every` keywords are **part of the language by default** — you no longer
+> import anything to use them. `import rego.v1` and `import future.keywords.*` are now
+> **no-ops** (still valid, just unnecessary). Write policies for the version of OPA you run:
+>
+> - **Targeting OPA 1.0+ (recommended, current default):** use the keywords directly, **no
+>   import needed**.
+> - **Targeting OPA 0.x, or a mixed fleet:** keep `import rego.v1` (works on 0.59.0+ and is a
+>   harmless no-op on 1.0+) so the same file runs on both.
+>
+> This skill's examples historically used `import rego.v1`; that remains 100% valid. New
+> policies for a 1.0+ runtime can simply omit it.
 
-Enables modern keywords and stricter semantics:
+### Keywords are default in OPA 1.0+ (no import)
 
 ```rego
-import rego.v1
+package authz
 
-# 'if' keyword required
+# No import line needed on OPA 1.0+ — if/in/contains/every are built in.
+
+default allow := false
+
+# 'if' for rule bodies (required on rules with a body in 1.0)
 allow if {
     condition
 }
 
-# 'in' keyword for membership
+# 'in' for membership / iteration
 allow if "admin" in input.roles
 
-# 'contains' for set rules
+# 'contains' for multi-value (set) rules
 errors contains msg if {
     # condition
     msg := "error message"
@@ -178,20 +193,37 @@ all_approved if {
 }
 ```
 
-### Avoid Deprecated Patterns
+If you must support OPA 0.x as well, add `import rego.v1` at the top — it enables the same
+keywords on 0.59.0+ and is a no-op on 1.0+. Do **not** mix `import rego.v1` with individual
+`import future.keywords.*` lines, and avoid duplicate imports (prohibited in 1.0).
 
-**Old:**
+### v1.0 breaking changes to know
+
+OPA 1.0 made several previously-optional rules mandatory. The audit/review checklist treats
+these as correctness, not style:
+
+- **Bodies require `if`:** `p { true }` → `p if { true }`. Multi-value rules require `contains`:
+  `p[x] { ... }` → `p contains x if { ... }`.
+- **`input` and `data` are reserved** — cannot be used as rule names or assignment targets.
+- **Duplicate / shadowing imports are prohibited.**
+- **Deprecated built-ins removed** — e.g. `any`, `all`, `re_match`, `net.cidr_overlap`,
+  `cast_array`, `cast_set`, etc. Use their modern equivalents (`in`/`every`, `regex.match`,
+  `net.cidr_contains`, …).
+
+### Avoid v0-only patterns
+
+**v0 (no longer valid on a 1.0 runtime):**
 ```rego
-allow {
+allow {                      # body with no 'if'
     input.user.role == "admin"
 }
 
-errors[msg] {
+errors[msg] {                # partial set without 'contains'
     msg := "error"
 }
 ```
 
-**New:**
+**v1.0:**
 ```rego
 allow if {
     input.user.role == "admin"
@@ -201,6 +233,20 @@ errors contains msg if {
     msg := "error"
 }
 ```
+
+### Migration & verification tooling
+
+When updating an existing 0.x policy base to 1.0:
+
+```bash
+opa check --v0-v1 policy.rego           # report v1 incompatibilities
+opa check --v0-v1 --strict policy.rego  # + additional strict-mode issues
+opa fmt --write --v0-v1 policy.rego     # auto-rewrite v0 syntax to v1
+regal lint policy.rego                  # lint for remaining quality issues (Regal)
+```
+
+`opa fmt --write --v0-v1` rewrites bodies to use `if`, partial sets to use `contains`, and
+drops the now-redundant `future.keywords` / `rego.v1` imports.
 
 ## Error Handling
 

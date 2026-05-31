@@ -51,20 +51,24 @@ allow if {
 }
 ```
 
-### 2. Modern Rego Syntax
+### 2. Modern Rego Syntax (OPA 1.0+)
 
-Use `import rego.v1` for modern syntax:
+On **OPA 1.0+** the `if` / `in` / `contains` / `every` keywords are built in — **no import
+needed**. (`import rego.v1` and `import future.keywords.*` are now no-ops; keep `import rego.v1`
+only if you must also run on OPA 0.x.) See [BEST-PRACTICES.md](BEST-PRACTICES.md) for the full
+1.0 migration notes.
 
 ```rego
-import rego.v1
+package authz
+# No import needed on OPA 1.0+.
 
-# Use 'if' keyword
+# Use 'if' for rule bodies
 allow if {
     some role in input.user.roles
     role == "admin"
 }
 
-# Use 'contains' for sets
+# Use 'contains' for set rules
 violations contains msg if {
     # condition
     msg := "violation message"
@@ -251,3 +255,104 @@ See `examples/` directory for complete working examples:
 
 - `rbac_test.rego` - RBAC with tests
 - `gateway_test.rego` - API gateway with tests
+
+---
+
+## Suite-wide security audit (Workflow)
+
+The generate / test / review loop above handles ONE policy at a time inline. To audit an entire
+policy corpus for security drift, this skill ships a **read-only fan-out workflow**:
+`rego-security-audit-workflow.js`. It spawns one auditor per `.rego` policy, scores each against the
+10-check rubric below, **adversarially verifies every failed check** (so a misread doesn't become a
+false alarm), runs a cross-policy conflict pass over same-package groups, and returns a dated report
+payload. **It is report-only — it never edits a policy.** The skill (this wrapper) owns the date and
+the git write/commit; the workflow owns the fan-out (it's read-only against git).
+
+> Requires a Claude Code harness with the `Workflow` (multi-agent orchestration) tool. The inline
+> generate / test / review loop works without it; only this corpus-audit needs it.
+
+### The 10 checks (each cites a SECURITY.md / BEST-PRACTICES.md section)
+
+| Check | Source | What it verifies |
+|-------|--------|------------------|
+| `DEFAULT_DENY` | SECURITY §1 | Explicit default deny; no unconditional allow. |
+| `INPUT_VALIDATION` | SECURITY §2 | Required fields checked; missing → deny not error; null/type handled. |
+| `PRIV_ESCALATION` | SECURITY §3 | Strict-inequality role levels; self-mod blocked; protected roles unassignable. |
+| `PATH_TRAVERSAL` | SECURITY §4 | Path/id inputs validated (`..`, `/`, `%`, `\`); no raw startswith. |
+| `REDOS` | SECURITY §4 | No user-controlled regex; glob/literal preferred. |
+| `DATA_EXPOSURE` | SECURITY §5 | Denial reasons don't leak roles/permissions/structure. |
+| `TIME_BASED` | SECURITY §6 | Token exp/nbf checked before access (where tokens are handled). |
+| `EVAL_CONFLICT` | BEST-PRACTICES | Competing rules mutually exclusive (whitelist guards / else-chains). |
+| `DOMAIN_LOGIC_LEAK` | BEST-PRACTICES | Policy does authz only — no business/validation/workflow logic. |
+| `TEST_COVERAGE` | TESTING | Companion `*_test.rego` covers allow + deny + edge cases. |
+
+> **Conventions are NOT findings.** Each policy is judged against ITS OWN idiom. Using
+> `import future.keywords` instead of `import rego.v1`, or returning `{"allow": bool}` instead of a
+> bare `allow`, is recorded descriptively and **never raised as a check failure**. Only genuine,
+> exploitable authorization defects are reported.
+
+### Running the audit
+
+```
+- [ ] 1. DATE=$(date +%F); ensure <root>/audit-reports/ exists.
+- [ ] 2. Run the workflow (background; you're notified on completion).
+- [ ] 3. Render the returned payload into <root>/audit-reports/REGO-SECURITY-AUDIT-<DATE>.md.
+- [ ] 4. Commit the report to a branch (never the default branch). Do NOT push or open an MR unless asked.
+- [ ] 5. Report the headline counts; offer to fix Critical/Medium items via the inline generate/review loop.
+```
+
+**Step 2 — invoke:**
+```
+Workflow({
+  scriptPath: "<this-skill-dir>/rego-security-audit-workflow.js",
+  args: { date: "<DATE>", policyRoot: "<dir-with-.rego-files>" }   // policyRoot defaults to cwd
+  // optional: focus (steer) | policies:[explicit list] | maxPolicies (default 12)
+})
+```
+
+The payload is `{ date, rubricVersion, scope:{audited,total,deferred,baselineTests,maxPolicies,policyRoot}, confirmed:[…severity-sorted, false alarms already dropped…], policyVerdicts:[…], crossPolicy:[…] }`.
+`confirmed` = findings that **survived adversarial verification**. `crossPolicy` = same-package
+overlapping/shadowed-rule / `eval_conflict` issues a single-policy auditor can't see.
+
+> **Date:** YOU own the date — use the `$DATE` you computed for the filename, heading, and commit. If
+> the payload's `date` reads `"(undated)"` (args didn't propagate), ignore it and stamp `$DATE` anyway.
+
+**Step 3 — report shape** (`REGO-SECURITY-AUDIT-<DATE>.md`):
+```markdown
+# Rego Security Audit — <DATE>
+
+**Scope:** audited <audited> of <total> policies; baseline `<baselineTests>`. **<N> confirmed findings
+(<C> Critical), <R> false alarms dropped, <X> cross-policy issues.**
+
+## Confirmed findings (fix these)        <!-- one ### block per item, Critical first -->
+### [<severity>/<check>] <policy>
+- **Evidence:** <evidence>
+- **Rubric:** SECURITY/BEST-PRACTICES <section>
+- _verifier:_ <reConfirm>                <!-- or "unverified — confirm manually" if no verdict -->
+
+## Cross-policy issues                    <!-- from crossPolicy[]; omit section if empty -->
+### [<severity>/<kind>] <policies>
+- <detail>
+
+## Per-policy verdicts
+| Policy | Package | Decision shape | Tests | Fails | N/A | Summary |
+|--------|---------|----------------|-------|-------|-----|---------|
+| … (one row per policyVerdicts entry) … |
+```
+
+If `confirmed` is empty, still write the report (a clean run is a useful record) and say so.
+
+**Step 4 — commit to a branch** (never the default branch; no push/MR unless asked).
+
+### Incremental mode (optional)
+The workflow carries a `RUBRIC_VERSION`. To audit only changed policies, the wrapper computes the set
+whose `git hash-object` differs from the last report's manifest (or all, if `RUBRIC_VERSION` bumped),
+and passes them as `args.policies`. First cut: full-suite every run (small corpora audit fast).
+
+### Notes & anti-patterns
+- **Report-only is the contract.** This workflow *finds*; you *fix* (via the inline generate/review
+  loop). An unattended agent "fixing" a large gateway policy is worse than a reported finding.
+- **The verify phase matters.** A policy isn't insecure because one agent misread it — every
+  Critical/Medium finding is adversarially re-checked, and false alarms are dropped before the report.
+- **Sizing:** keep a run ≤ ~12 policies / ~50 agents. `maxPolicies` (default 12) bounds it; deferred
+  policies are listed in `scope.deferred` and re-surface on a later run.
