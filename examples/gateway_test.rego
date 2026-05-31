@@ -100,6 +100,60 @@ test_allow_register_without_token if {
 }
 
 ###################
+# Public-pattern over-match / bypass regression tests
+###################
+# Regression for the glob-delimiter bypass: with the default ([]) delimiter, `*` crossed `/`, so a
+# crafted multi-segment path ending in a public suffix matched a public pattern and was served with
+# NO token. The ["/"] delimiter confines `*` to one segment and closes this.
+
+test_deny_crafted_path_overmatching_public_login if {
+    not gateway.allow with input as {
+        "method": "POST",
+        "path": "/api/v1/admin/things/auth/login"
+    }
+}
+
+test_deny_crafted_admin_path_overmatching_public_login if {
+    # /api/v1/admin/auth/login must NOT be served anonymously as a public login endpoint
+    not gateway.allow with input as {
+        "method": "GET",
+        "path": "/api/v1/admin/auth/login"
+    }
+}
+
+test_deny_crafted_path_overmatching_public_health if {
+    not gateway.allow with input as {
+        "method": "GET",
+        "path": "/api/health/admin/delete-everything"
+    }
+}
+
+# The legitimate single-segment public endpoints still work after the fix.
+test_allow_versioned_login_still_public if {
+    gateway.allow with input as {
+        "method": "POST",
+        "path": "/api/v1/auth/login"
+    }
+}
+
+# A nested resource path under an authorized subtree still matches (** spans segments).
+test_allow_admin_nested_resource if {
+    gateway.allow with input as {
+        "method": "GET",
+        "path": "/api/v1/admin/settings/security",
+        "token": admin_token
+    }
+}
+
+test_allow_manager_update_nested_user if {
+    gateway.allow with input as {
+        "method": "PUT",
+        "path": "/api/v1/users/123/profile",
+        "token": manager_token
+    }
+}
+
+###################
 # Admin Endpoint Tests
 ###################
 
