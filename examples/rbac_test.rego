@@ -2,7 +2,6 @@
 
 package examples.rbac_test
 
-import rego.v1
 import data.examples.rbac
 
 ###################

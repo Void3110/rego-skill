@@ -3,8 +3,6 @@
 
 package examples.gateway
 
-import rego.v1
-
 # Expected input:
 # {
 #   "method": "GET" | "POST" | "PUT" | "DELETE",

@@ -2,7 +2,6 @@
 
 package examples.gateway_test
 
-import rego.v1
 import data.examples.gateway
 
 ###################

@@ -51,20 +51,24 @@ allow if {
 }
 ```
 
-### 2. Modern Rego Syntax
+### 2. Modern Rego Syntax (OPA 1.0+)
 
-Use `import rego.v1` for modern syntax:
+On **OPA 1.0+** the `if` / `in` / `contains` / `every` keywords are built in — **no import
+needed**. (`import rego.v1` and `import future.keywords.*` are now no-ops; keep `import rego.v1`
+only if you must also run on OPA 0.x.) See [BEST-PRACTICES.md](BEST-PRACTICES.md) for the full
+1.0 migration notes.
 
 ```rego
-import rego.v1
+package authz
+# No import needed on OPA 1.0+.
 
-# Use 'if' keyword
+# Use 'if' for rule bodies
 allow if {
     some role in input.user.roles
     role == "admin"
 }
 
-# Use 'contains' for sets
+# Use 'contains' for set rules
 violations contains msg if {
     # condition
     msg := "violation message"

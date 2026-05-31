@@ -5,6 +5,8 @@
 
 > Sample report produced by this skill's own suite-wide security-audit workflow (`rego-security-audit-workflow.js`), run against the policies shipped in this repo. **Report-only** — the audit never edits a policy. Each Critical/Medium finding was adversarially re-checked (the verifier actually ran `opa eval` to reproduce the bypass). Style/idiom divergence (`import future.keywords` vs `rego.v1`, `{"allow": bool}` vs bare `allow`) is never a finding.
 
+> **✅ Resolution (post-audit):** The Medium `PATH_TRAVERSAL` finding in `examples/gateway.rego` (the `glob.match` `[]`-delimiter bypass) has since been **fixed** — both call sites now pass the `["/"]` delimiter and nested-resource rules use `**`, with 6 regression tests added. This report is kept as the point-in-time audit artifact that *found* it. The 3 Low/cross-policy `DATA_EXPOSURE` items are in the example policies' intentional debug `decision` objects and are left as teaching demos.
+
 ---
 
 ## Confirmed findings (fix these)

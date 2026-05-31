@@ -15,8 +15,6 @@
 
 package paas.request.gateway
 
-import rego.v1
-
 ###################
 # Default Deny
 ###################

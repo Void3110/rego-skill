@@ -5,8 +5,6 @@
 
 package paas.request.actions
 
-import rego.v1
-
 ###################
 # Domain Actions
 ###################
