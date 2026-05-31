@@ -71,17 +71,30 @@ So the agent count is **O(P)** but with a meaningful constant (the verify fan-ou
 reads an entire policy — and real gateway policies can be **1,000–2,000 lines** — so the per-agent
 input is not trivial.
 
-### Real measured cost (from this skill's own development)
+### Real measured cost (from this skill's own development & validation runs)
+
+Sub-agent output tokens, measured from actual runs (the harness reports them per run):
 
 | Run | Policies | Agents | Wall-clock | Sub-agent tokens |
 |---|---|---|---|---|
-| Smoke | 1 | 3 | ~2 min | ~100k |
-| Package family | 4 | 10 | ~6 min | ~550k |
-| Full suite | 8 (one 1,828-line) | 17 | ~50 min | ~480k |
+| Smoke (1 policy, no findings) | 1 | 3 | ~2 min | ~100k |
+| Smoke (1 policy, 2 confirmed bugs) | 1 | 6 | ~2 min | ~180k |
+| Package family — dense (findings-heavy) | 4 | 10 | ~6 min | ~550k |
+| Package family — same 4, clean run | 4 | 9–10 | ~4–6 min | ~340–380k |
+| Full suite (one 1,828-line policy) | 8 | 17 | ~50 min | ~480k |
 
-Note the full suite took *longer* but used *fewer* tokens per policy than the 4-policy run,
-because the 4-policy run hit a dense cross-policy package (more verify + cross agents). **Token
-cost tracks findings density and cross-policy structure, not just policy count.**
+The two **same-4-policy** rows are the key data point: the identical corpus cost **~550k** when it
+surfaced many findings (each spawning a verifier) versus **~340–380k** on a clean run — a ~40%
+swing with zero change to the policy count. The full suite even took *longer* yet used *fewer*
+tokens than the dense 4-policy run. **Token cost tracks findings density and cross-policy structure,
+not just policy count** — the verify and cross-policy fan-outs are the variable cost, and a single
+1,000–2,000-line policy inflates per-auditor input regardless of how many policies there are.
+
+> Rough planning figure: observed per-policy cost ranged **~60k–180k sub-agent tokens** across these
+> runs (~90–140k is typical). It trends *lower* per policy on bigger clean sweeps (fixed overhead
+> amortizes, e.g. ~60k/policy on the 8-policy suite) and *higher* when a policy generates several
+> Critical/Medium findings that each spawn a verifier (~180k on a 1-policy run with 2 confirmed
+> bugs). These are *output* tokens across all sub-agents; the main loop's own usage is on top.
 
 ### Cost controls built into this workflow
 
